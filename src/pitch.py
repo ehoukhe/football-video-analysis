@@ -98,40 +98,76 @@ class StaticCalibrator:
 
 
 class AutoKeypointCalibrator:
-    """Per-ruta homografi via detekterade plan-nyckelpunkter (Fas 2).
+    """Per-ruta homografi via en plan-nyckelpunktsdetektor (Fas 2).
 
-    Tar en ``keypoint_detector`` som givet en bildruta returnerar en lista av
-    ``(namn, (x_pixel, y_pixel))`` för synliga planpunkter. Namnen ska matcha
-    :meth:`PitchModel.landmarks`. Homografin räknas om per ruta (med enkel
-    cachning) så att en rörlig kamera hanteras.
+    ``detector`` är valfritt objekt som anropas ``detector(frame)`` och
+    returnerar ett par ``(image_points, pitch_points_m)`` med de nyckelpunkter
+    som hittades i rutan (redan konfidens-filtrerade och ihopparade), där
+    ``image_points`` är i pixlar och ``pitch_points_m`` är motsvarande
+    plankoordinater i meter. Returnera ``(None, None)`` eller för få punkter om
+    rutan inte kan kalibreras. Homografin räknas om per ruta -> hanterar en
+    rörlig kamera.
 
-    Nyckelpunktsmodellen är den tunga biten som ännu inte ingår – injicera en
-    tränad modell (SoccerNet-/Roboflow-stil) via ``keypoint_detector``.
+    Detektorn är modell-agnostisk: se :class:`YoloPitchKeypointDetector` för en
+    ultralytics-baserad implementation.
     """
 
-    def __init__(self, keypoint_detector, pitch: Optional[PitchModel] = None) -> None:
-        if keypoint_detector is None:
-            raise NotImplementedError(
-                "AutoKeypointCalibrator kräver en tränad nyckelpunktsmodell "
-                "(keypoint_detector). Se Fas 2 – ingen sådan ingår ännu."
-            )
-        self.detector = keypoint_detector
-        self.pitch = pitch or PitchModel()
-        self._landmarks = self.pitch.landmarks()
+    def __init__(self, detector, min_points: int = 4) -> None:
+        self.detector = detector
+        self.min_points = min_points
 
     def homography_for(self, frame, frame_idx) -> Optional[ViewTransformer]:
-        detected = self.detector(frame)  # [(namn, (x, y)), ...]
-        img_pts, pitch_pts = [], []
-        for name, xy in detected:
-            if name in self._landmarks:
-                img_pts.append(xy)
-                pitch_pts.append(self._landmarks[name])
-        if len(img_pts) < 4:
-            return None  # för få punkter denna ruta -> ingen kalibrering
+        image_points, pitch_points = self.detector(frame)
+        if image_points is None or len(image_points) < self.min_points:
+            return None
         try:
-            return ViewTransformer(img_pts, pitch_pts)
+            return ViewTransformer(image_points, pitch_points)
         except ValueError:
             return None
+
+
+class YoloPitchKeypointDetector:
+    """Plan-nyckelpunkter via en ultralytics YOLO-pose-modell.
+
+    ``model`` är en laddad ``ultralytics.YOLO``-pose-modell som förutspår K
+    plan-nyckelpunkter per bild. ``vertices_m`` är en (K, 2)-lista med varje
+    nyckelpunkts kända plankoordinat i meter, i SAMMA ordning som modellens
+    nyckelpunkter (hämtas t.ex. från Roboflows ``SoccerPitchConfiguration``).
+
+    Anropas ``detector(frame) -> (image_points, pitch_points_m)`` och returnerar
+    bara punkter med konfidens >= ``conf``.
+    """
+
+    def __init__(self, model, vertices_m, conf: float = 0.5, imgsz: int = 1280,
+                 device: Optional[str] = None) -> None:
+        self.model = model
+        self.vertices = np.asarray(vertices_m, dtype=np.float32)
+        self.conf = conf
+        self.imgsz = imgsz
+        self.device = device
+
+    def __call__(self, frame):
+        res = self.model.predict(
+            frame, imgsz=self.imgsz, device=self.device, verbose=False
+        )
+        if not res:
+            return None, None
+        kps = res[0].keypoints
+        if kps is None or kps.xy is None:
+            return None, None
+        xy = kps.xy.cpu().numpy()
+        if xy.ndim == 3:
+            xy = xy[0]  # första instansen (planet)
+        conf = (
+            kps.conf.cpu().numpy() if kps.conf is not None else np.ones(len(xy))
+        )
+        conf = conf[0] if conf.ndim == 2 else conf
+
+        k = min(len(xy), len(self.vertices), len(conf))
+        keep = np.where(conf[:k] >= self.conf)[0]
+        if len(keep) < 4:
+            return None, None
+        return xy[keep], self.vertices[keep]
 
 
 def draw_pitch_heatmap(

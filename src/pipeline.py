@@ -46,21 +46,30 @@ def _build_calibrator(pitch_cfg: dict):
                 "pitch_points (minst 4 punkt-par) i config."
             )
         return StaticCalibrator(img_pts, pitch_pts)
-    raise NotImplementedError(
-        f"Kalibrator '{mode}' stöds inte än. 'auto' (per-ruta nyckelpunkter) "
-        "kräver en tränad modell – se Fas 2."
-    )
+    if mode == "auto":
+        raise ValueError(
+            "calibrator: auto kräver en tränad nyckelpunktsmodell och byggs i "
+            "kod, inte ur YAML. Skapa en AutoKeypointCalibrator (se "
+            "YoloPitchKeypointDetector) och skicka in den: "
+            "analyze_video(video, cfg, calibrator=cal). Se Colab-notebooken."
+        )
+    raise NotImplementedError(f"Okänd kalibrator '{mode}'.")
 
 
-def analyze_video(video_path: str, config: dict) -> AnalysisResult:
-    """Kör hela analyspipelinen på en videofil enligt konfigurationen."""
+def analyze_video(video_path: str, config: dict, calibrator=None) -> AnalysisResult:
+    """Kör hela analyspipelinen på en videofil enligt konfigurationen.
+
+    ``calibrator`` kan skickas in färdigbyggd (t.ex. en AutoKeypointCalibrator
+    med en laddad nyckelpunktsmodell från Colab). Ges ingen byggs den ur config.
+    """
     m = config["model"]
     v = config["video"]
     o = config["output"]
     t = config.get("teams", {})
     p = config.get("pitch", {})
 
-    calibrator = _build_calibrator(p)
+    if calibrator is None:
+        calibrator = _build_calibrator(p)
 
     out_dir = Path(o.get("dir", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
