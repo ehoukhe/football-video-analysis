@@ -44,6 +44,9 @@ class MatchStats:
         self.possession_frames: dict[str, int] = defaultdict(int)
         self.total_possession_frames = 0
 
+        # Diagnostik: hur många spelardetektioner som tilldelats respektive lag.
+        self.team_detections: dict[str, int] = defaultdict(int)
+
     def update(self, result: FrameResult) -> None:
         """Mata in en bildrutas detektioner."""
         for det in result.players:
@@ -52,6 +55,7 @@ class MatchStats:
                 self.tracks[det.track_id].append(det.foot_point)
             if det.team:
                 self.team_points[det.team].append(det.foot_point)
+                self.team_detections[det.team] += 1
 
         for det in result.balls:
             self.ball_points.append(det.center)
@@ -104,6 +108,9 @@ class MatchStats:
             "ball_detections": len(self.ball_points),
             "tracked_ids": len(self.tracks),
             "possession_pct": self.possession_pct(),
+            # Diagnostik för att bedöma om possession är tillförlitlig:
+            "possession_sample_frames": self.total_possession_frames,
+            "team_player_detections": dict(self.team_detections),
             "distance_px_per_track": {
                 str(k): round(v, 1) for k, v in self.distance_per_track().items()
             },
@@ -181,37 +188,62 @@ def generate_coach_insights(stats: MatchStats) -> list[str]:
     insights: list[str] = []
     poss = stats.possession_pct()
 
-    if poss:
+    # Bedöm om possession är tillförlitlig innan vi drar slutsatser av den.
+    team_counts = stats.team_detections
+    n_teams_seen = len([t for t, c in team_counts.items() if c > 0])
+    balanced = False
+    if len(team_counts) == 2:
+        a, b = sorted(team_counts.values())
+        balanced = a >= 0.15 * (a + b)  # minst 15 % till det mindre laget
+
+    if poss and stats.total_possession_frames >= 30 and n_teams_seen == 2 and balanced:
         top_team = max(poss, key=poss.get)
         insights.append(
-            f"Bollinnehav: {', '.join(f'{t} {p}%' for t, p in poss.items())}. "
-            f"{top_team} dominerade innehavet."
+            f"Bollinnehav: {', '.join(f'{t} {p}%' for t, p in poss.items())} "
+            f"(baserat på {stats.total_possession_frames} rutor). "
+            f"{top_team} hade mest boll."
         )
-        # Balans-kommentar
         values = list(poss.values())
         if len(values) == 2 and abs(values[0] - values[1]) > 20:
             insights.append(
-                "Stor skillnad i bollinnehav – överväg att jobba på att hålla bollen "
-                "i laget med lägre innehav (pressresistens, passningsspel)."
+                "Tydlig skillnad i bollinnehav – överväg att jobba på att hålla "
+                "bollen i laget med lägre innehav (pressresistens, passningsspel)."
             )
     else:
+        # Possession finns men är inte tillförlitlig – förklara varför.
+        reason = []
+        if not poss:
+            reason.append("inga lag kunde tilldelas")
+        if stats.total_possession_frames < 30:
+            reason.append(
+                f"för få mätrutor ({stats.total_possession_frames})"
+            )
+        if n_teams_seen < 2:
+            reason.append("bara ett lag hittades")
+        elif not balanced:
+            reason.append(
+                f"mycket obalanserad lag-uppdelning ({dict(team_counts)})"
+            )
         insights.append(
-            "Ingen possession-statistik kunde beräknas (aktivera lag-detektering i "
-            "config för detta)."
+            "Bollinnehav är inte tillförlitligt än ("
+            + "; ".join(reason)
+            + "). Lag-detekteringen via tröjfärg är osäker på den här filmen – "
+            "för robust possession krävs en fotbollstränad spelaridentifiering "
+            "(och helst plankalibrering)."
         )
 
     dists = stats.distance_per_track()
     if dists:
         active = sorted(dists.items(), key=lambda kv: kv[1], reverse=True)[:3]
         insights.append(
-            "Mest rörliga spelare (spår-ID, sträcka i pixlar): "
+            "Mest rörliga spår (spår-ID, sträcka i pixlar, ej meter): "
             + ", ".join(f"#{tid}: {d:.0f}" for tid, d in active)
         )
 
     if len(stats.ball_points) < 0.1 * max(1, len(stats.player_points)):
         insights.append(
-            "Bollen detekterades sällan – prova en större YOLO-modell (yolov8m/l) "
-            "eller högre videoupplösning för bättre bollspårning."
+            "Bollen detekterades sällan – höj imgsz (t.ex. 1920) eller använd en "
+            "fotbollstränad modell med egen boll-klass för bättre bollspårning."
         )
 
     return insights

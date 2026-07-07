@@ -15,6 +15,7 @@ ignorerar gräsgröna/omättade pixlar så att planen inte stör färgbedömning
 from __future__ import annotations
 
 import math
+from collections import Counter, defaultdict
 from typing import Optional
 
 import cv2
@@ -86,11 +87,18 @@ class AutoTeamClassifier:
         team_a_name: str = "Lag A",
         team_b_name: str = "Lag B",
         sample_target: int = 300,
+        min_box_height: int = 30,
     ) -> None:
         self.team_names = (team_a_name, team_b_name)
         self.sample_target = sample_target
+        # Spelare vars box är lägre än så här (pixlar) är för små för att
+        # tröjfärgen ska vara tillförlitlig -> tilldelas inget lag.
+        self.min_box_height = min_box_height
         self._samples: list[np.ndarray] = []
         self._centroids: Optional[np.ndarray] = None
+        # Röster per spår-ID -> stabil lagtillhörighet (spelare byter inte lag
+        # mellan rutor även om enskilda mätningar spretar).
+        self._track_votes: dict[int, Counter] = defaultdict(Counter)
 
     @property
     def fitted(self) -> bool:
@@ -140,6 +148,11 @@ class AutoTeamClassifier:
     def classify(self, frame: np.ndarray, det: Detection) -> Optional[str]:
         if not det.is_player:
             return None
+        # Hoppa över för små spelare – deras tröjfärg är opålitlig.
+        x1, y1, x2, y2 = det.xyxy
+        if (y2 - y1) < self.min_box_height:
+            return None
+
         feat = self._feature(frame, det)
         if feat is None:
             return None
@@ -151,6 +164,16 @@ class AutoTeamClassifier:
             return None  # lagen ännu inte bestämda
 
         dists = np.linalg.norm(self._centroids - feat, axis=1)
-        team = self.team_names[int(np.argmin(dists))]
+        inst_team = self.team_names[int(np.argmin(dists))]
+
+        # Utan spår-ID: använd den momentana bedömningen.
+        if det.track_id is None:
+            det.team = inst_team
+            return inst_team
+
+        # Med spår-ID: rösta och returnera majoriteten för det spåret (stabilt).
+        votes = self._track_votes[det.track_id]
+        votes[inst_team] += 1
+        team = votes.most_common(1)[0][0]
         det.team = team
         return team
