@@ -1,0 +1,29 @@
+# === Kärnberoenden för fotbolls-videoanalys ===
+
+# Objektdetektering & spårning (YOLOv8 ingår i ultralytics)
+ultralytics>=8.2.0          # YOLOv8/YOLO11 detektering + inbyggd ByteTrack/BoT-SORT
+torch>=2.1.0                # backend för ultralytics (installeras oftast automatiskt)
+torchvision>=0.16.0
+
+# Video- och bildbehandling
+opencv-python>=4.9.0        # läsa/skriva video, rita annoteringar
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Dataanalys & visualisering (heatmaps, statistik)
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.13.0             # snygga heatmaps
+scipy>=1.11.0               # gaussian-utjämning av heatmaps
+
+# Konfiguration & CLI
+PyYAML>=6.0
+tqdm>=4.66.0               # progressbar under bearbetning
+
+# Nedladdning av YouTube-matcher (valfritt)
+yt-dlp>=2024.1.0
+
+# === Utveckling (valfritt) ===
+# pytest>=8.0.0
+# black>=24.0.0
+# ruff>=0.3.0

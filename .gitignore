@@ -1,0 +1,34 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# === Modellvikter (laddas ner vid behov) ===
+*.pt
+*.onnx
+*.engine
+
+# === Video- & mediafiler (kan vara stora) ===
+data/*.mp4
+data/*.mov
+data/*.avi
+data/*.mkv
+data/*.webm
+
+# === Genererad output ===
+output/*.mp4
+output/*.png
+output/*.jpg
+output/*.csv
+output/*.json
+!output/.gitkeep
+
+# === OS / editor ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

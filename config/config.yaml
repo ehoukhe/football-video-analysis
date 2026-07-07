@@ -1,0 +1,50 @@
+# === Konfiguration för fotbolls-videoanalys ===
+# Alla värden kan överstyras via CLI-flaggor i scripts/analyze_match.py
+
+model:
+  # YOLOv8-modell. Alternativ (liten -> stor, snabb -> noggrann):
+  # yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
+  # Ladas ner automatiskt av ultralytics första gången.
+  weights: "yolov8n.pt"
+  conf: 0.30          # minsta konfidens för en detektion (0-1)
+  iou: 0.50           # IoU-tröskel för non-max suppression
+  device: ""          # "" = auto (GPU om tillgänglig), "cpu", "0" för första GPU
+  # COCO-klasser vi bryr oss om: 0 = person, 32 = sports ball
+  classes: [0, 32]
+
+tracker:
+  # Inbyggd tracker i ultralytics. "bytetrack.yaml" eller "botsort.yaml"
+  type: "bytetrack.yaml"
+
+video:
+  # Läs var N:te bildruta för snabbare bearbetning (1 = varje ruta).
+  frame_stride: 1
+  # Skala ner till denna bredd innan detektering (behåller proportioner).
+  # 0 = ingen skalning.
+  resize_width: 1280
+  # Max antal rutor att bearbeta (0 = hela videon). Bra för snabbtest.
+  max_frames: 0
+
+pitch:
+  # Ungefärliga plandimensioner i meter (för statistik/heatmap-axlar).
+  length_m: 105
+  width_m: 68
+
+teams:
+  # Enkel lag-uppdelning baserat på dominerande tröjfärg (HSV).
+  # Sätt enable: true och justera färgintervallen för din match.
+  enable: false
+  team_a_name: "Lag A"
+  team_b_name: "Lag B"
+  # HSV-intervall [H(0-179), S(0-255), V(0-255)]
+  team_a_hsv_low: [100, 80, 50]    # ex. blått
+  team_a_hsv_high: [130, 255, 255]
+  team_b_hsv_low: [0, 80, 50]      # ex. rött
+  team_b_hsv_high: [10, 255, 255]
+
+output:
+  dir: "output"
+  save_video: true          # spara annoterad video
+  save_heatmap: true        # spara heatmaps
+  save_stats: true          # spara statistik som CSV/JSON
+  heatmap_bins: [68, 105]   # upplösning på heatmap-rutnät [y, x]
