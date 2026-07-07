@@ -75,6 +75,8 @@ class PlayerBallDetector:
         device: str = "",
         classes: Optional[list[int]] = None,
         tracker: str = "bytetrack.yaml",
+        half: bool = False,
+        imgsz: int = 640,
     ) -> None:
         # Importeras lokalt för att hålla modulen importerbar utan tunga beroenden.
         from ultralytics import YOLO
@@ -85,6 +87,9 @@ class PlayerBallDetector:
         self.device = device or None
         self.classes = classes if classes is not None else [PERSON_CLASS, BALL_CLASS]
         self.tracker = tracker
+        # FP16 ger bara vinst på GPU; tvinga av på CPU för att undvika fel.
+        self.half = bool(half) and self.device not in (None, "cpu")
+        self.imgsz = imgsz
 
     def track_frame(self, frame: np.ndarray, frame_idx: int) -> FrameResult:
         """Kör detektering + spårning på en bildruta och returnerar resultatet.
@@ -100,6 +105,8 @@ class PlayerBallDetector:
             device=self.device,
             classes=self.classes,
             tracker=self.tracker,
+            half=self.half,
+            imgsz=self.imgsz,
             verbose=False,
         )
 

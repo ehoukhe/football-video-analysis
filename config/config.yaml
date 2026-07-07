@@ -9,6 +9,8 @@ model:
   conf: 0.30          # minsta konfidens för en detektion (0-1)
   iou: 0.50           # IoU-tröskel för non-max suppression
   device: ""          # "" = auto (GPU om tillgänglig), "cpu", "0" för första GPU
+  half: true          # FP16 – ~1.5-2x snabbare på GPU (T4). Ignoreras på CPU.
+  imgsz: 640          # inferensupplösning. Högre (960/1280) = bättre bolldetektering men långsammare.
   # COCO-klasser vi bryr oss om: 0 = person, 32 = sports ball
   classes: [0, 32]
 

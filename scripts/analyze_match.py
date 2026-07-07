@@ -41,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--weights", help="Överstyr YOLO-vikter, t.ex. yolov8m.pt.")
     p.add_argument("--conf", type=float, help="Överstyr konfidenströskel (0-1).")
     p.add_argument("--device", help="Överstyr enhet: '', 'cpu' eller '0'.")
+    p.add_argument("--imgsz", type=int, help="Inferensupplösning (t.ex. 640, 960).")
+    p.add_argument("--no-half", action="store_true", help="Stäng av FP16 (halvprecision).")
     p.add_argument("--resize-width", type=int, help="Överstyr nedskalningsbredd.")
     p.add_argument("--frame-stride", type=int, help="Läs var N:te bildruta.")
     p.add_argument("--max-frames", type=int, help="Max antal rutor (0 = alla).")
@@ -57,6 +59,10 @@ def apply_overrides(config: dict, args: argparse.Namespace) -> dict:
         config["model"]["conf"] = args.conf
     if args.device is not None:
         config["model"]["device"] = args.device
+    if args.imgsz is not None:
+        config["model"]["imgsz"] = args.imgsz
+    if args.no_half:
+        config["model"]["half"] = False
     if args.resize_width is not None:
         config["video"]["resize_width"] = args.resize_width
     if args.frame_stride is not None:

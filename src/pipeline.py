@@ -48,6 +48,8 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
         device=m.get("device", ""),
         classes=m.get("classes"),
         tracker=config.get("tracker", {}).get("type", "bytetrack.yaml"),
+        half=m.get("half", False),
+        imgsz=m.get("imgsz", 640),
     )
 
     team_clf: Optional[TeamClassifier] = None
