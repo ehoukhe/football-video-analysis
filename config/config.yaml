@@ -41,6 +41,20 @@ pitch:
   length_m: 105
   width_m: 68
 
+  # Plankalibrering: mappa bildpixlar -> meter för top-down-vy, heatmaps i meter
+  # och löpsträckor i meter. Av som standard.
+  calibrate: false
+  # "static" = en fast homografi (STILLASTÅENDE kamera). "auto" = per-ruta
+  # nyckelpunkter (RÖRLIG kamera) – kräver tränad modell (Fas 2, ej klar än).
+  calibrator: "static"
+  # För "static": para ihop minst 4 bildpunkter (pixlar) med plankoordinater
+  # (meter). Plankoordinater: x = 0..längd, y = 0..bredd, origo övre vänstra hörn.
+  # Exempel (byt ut mot din films faktiska punkter):
+  # image_points: [[210, 880], [1700, 870], [95, 520], [1810, 515]]
+  # pitch_points: [[0, 68], [105, 68], [0, 0], [105, 0]]
+  image_points: []
+  pitch_points: []
+
 teams:
   # Lag-uppdelning för possession och lagvisa heatmaps.
   enable: false

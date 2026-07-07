@@ -30,12 +30,37 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def _build_calibrator(pitch_cfg: dict):
+    """Skapar en kalibrator utifrån config, eller None om avstängd."""
+    if not pitch_cfg.get("calibrate"):
+        return None
+    from .pitch import StaticCalibrator
+
+    mode = pitch_cfg.get("calibrator", "static")
+    if mode == "static":
+        img_pts = pitch_cfg.get("image_points")
+        pitch_pts = pitch_cfg.get("pitch_points")
+        if not img_pts or not pitch_pts:
+            raise ValueError(
+                "pitch.calibrate=true med static kräver image_points och "
+                "pitch_points (minst 4 punkt-par) i config."
+            )
+        return StaticCalibrator(img_pts, pitch_pts)
+    raise NotImplementedError(
+        f"Kalibrator '{mode}' stöds inte än. 'auto' (per-ruta nyckelpunkter) "
+        "kräver en tränad modell – se Fas 2."
+    )
+
+
 def analyze_video(video_path: str, config: dict) -> AnalysisResult:
     """Kör hela analyspipelinen på en videofil enligt konfigurationen."""
     m = config["model"]
     v = config["video"]
     o = config["output"]
     t = config.get("teams", {})
+    p = config.get("pitch", {})
+
+    calibrator = _build_calibrator(p)
 
     out_dir = Path(o.get("dir", "output"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +135,10 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
                 for det in result.players:
                     team_clf.classify(frame, det)
 
-            stats.update(result)
+            transformer = (
+                calibrator.homography_for(frame, frame_idx) if calibrator else None
+            )
+            stats.update(result, transformer=transformer)
 
             if writer is not None:
                 writer.write(draw_frame(frame, result))
@@ -135,6 +163,21 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
                 )
                 if pt:
                     heatmaps.append(pt)
+
+        # Top-down heatmaps i meter (om kalibrering fanns).
+        if stats.has_calibration:
+            td = stats.save_pitch_heatmap(
+                str(out_dir / f"{stem}_topdown_players.png"), "players"
+            )
+            if td:
+                heatmaps.append(td)
+            if team_clf is not None:
+                for team in (t.get("team_a_name", "Lag A"), t.get("team_b_name", "Lag B")):
+                    tdt = stats.save_pitch_heatmap(
+                        str(out_dir / f"{stem}_topdown_{team}.png"), "team", team=team
+                    )
+                    if tdt:
+                        heatmaps.append(tdt)
 
     # Statistik-JSON
     if o.get("save_stats"):

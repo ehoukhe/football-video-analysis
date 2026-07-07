@@ -47,8 +47,27 @@ class MatchStats:
         # Diagnostik: hur många spelardetektioner som tilldelats respektive lag.
         self.team_detections: dict[str, int] = defaultdict(int)
 
-    def update(self, result: FrameResult) -> None:
-        """Mata in en bildrutas detektioner."""
+        # Plankoordinater i meter (fylls bara i om en kalibrering finns).
+        self.pitch_points_m: list[tuple[float, float]] = []
+        self.pitch_team_points_m: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        self.track_pitch_m: dict[int, list[tuple[float, float]]] = defaultdict(list)
+        self.has_calibration = False
+
+    def update(self, result: FrameResult, transformer=None) -> None:
+        """Mata in en bildrutas detektioner.
+
+        ``transformer`` är en ViewTransformer (bild->meter) för denna ruta, eller
+        None om ingen kalibrering finns/kunde beräknas för rutan.
+        """
+        # Plankoordinater (meter) om vi har en homografi för rutan.
+        foot_m: dict[int, tuple[float, float]] = {}
+        if transformer is not None and result.players:
+            pts = [d.foot_point for d in result.players]
+            metres = transformer.transform(pts)
+            self.has_calibration = True
+            for d, m in zip(result.players, metres):
+                foot_m[id(d)] = (float(m[0]), float(m[1]))
+
         for det in result.players:
             self.player_points.append(det.foot_point)
             if det.track_id is not None:
@@ -56,6 +75,14 @@ class MatchStats:
             if det.team:
                 self.team_points[det.team].append(det.foot_point)
                 self.team_detections[det.team] += 1
+
+            m = foot_m.get(id(det))
+            if m is not None:
+                self.pitch_points_m.append(m)
+                if det.track_id is not None:
+                    self.track_pitch_m[det.track_id].append(m)
+                if det.team:
+                    self.pitch_team_points_m[det.team].append(m)
 
         for det in result.balls:
             self.ball_points.append(det.center)
@@ -102,8 +129,24 @@ class MatchStats:
             distances[tid] = float(steps.sum())
         return distances
 
+    def distance_m_per_track(self, max_step_m: float = 5.0) -> dict[int, float]:
+        """Löpsträcka i meter per spår (kräver kalibrering).
+
+        Steg längre än ``max_step_m`` mellan två mätpunkter ignoreras – de beror
+        oftast på brus i homografin eller ID-byten, inte på verklig löpning.
+        """
+        distances: dict[int, float] = {}
+        for tid, pts in self.track_pitch_m.items():
+            if len(pts) < 2:
+                continue
+            arr = np.asarray(pts)
+            steps = np.linalg.norm(np.diff(arr, axis=0), axis=1)
+            steps = steps[steps <= max_step_m]  # rensa orimliga hopp
+            distances[tid] = float(steps.sum())
+        return distances
+
     def summary(self) -> dict:
-        return {
+        out = {
             "frames_with_players": len(self.player_points),
             "ball_detections": len(self.ball_points),
             "tracked_ids": len(self.tracks),
@@ -111,10 +154,15 @@ class MatchStats:
             # Diagnostik för att bedöma om possession är tillförlitlig:
             "possession_sample_frames": self.total_possession_frames,
             "team_player_detections": dict(self.team_detections),
+            "calibrated": self.has_calibration,
             "distance_px_per_track": {
                 str(k): round(v, 1) for k, v in self.distance_per_track().items()
             },
         }
+        if self.has_calibration:
+            dm = self.distance_m_per_track()
+            out["distance_m_per_track"] = {str(k): round(v, 1) for k, v in dm.items()}
+        return out
 
     def save_json(self, path: str) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +230,22 @@ class MatchStats:
         plt.close(fig)
         return path
 
+    def save_pitch_heatmap(
+        self, path: str, which: str = "players", team: Optional[str] = None
+    ) -> Optional[str]:
+        """Top-down heatmap i meter på en planritning (kräver kalibrering)."""
+        if not self.has_calibration:
+            return None
+        from .pitch import draw_pitch_heatmap
+
+        if which == "team" and team is not None:
+            points = self.pitch_team_points_m.get(team, [])
+            title = f"{team} – top-down (meter)"
+        else:
+            points = self.pitch_points_m
+            title = "Spelare – top-down (meter)"
+        return draw_pitch_heatmap(points, path, title=title)
+
 
 def generate_coach_insights(stats: MatchStats) -> list[str]:
     """Genererar enkla textbaserade insikter för tränaren utifrån statistiken."""
@@ -232,13 +296,22 @@ def generate_coach_insights(stats: MatchStats) -> list[str]:
             "(och helst plankalibrering)."
         )
 
-    dists = stats.distance_per_track()
-    if dists:
-        active = sorted(dists.items(), key=lambda kv: kv[1], reverse=True)[:3]
-        insights.append(
-            "Mest rörliga spår (spår-ID, sträcka i pixlar, ej meter): "
-            + ", ".join(f"#{tid}: {d:.0f}" for tid, d in active)
-        )
+    if stats.has_calibration:
+        dists_m = stats.distance_m_per_track()
+        if dists_m:
+            active = sorted(dists_m.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            insights.append(
+                "Mest rörliga spår (spår-ID, sträcka i METER): "
+                + ", ".join(f"#{tid}: {d:.0f} m" for tid, d in active)
+            )
+    else:
+        dists = stats.distance_per_track()
+        if dists:
+            active = sorted(dists.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            insights.append(
+                "Mest rörliga spår (spår-ID, sträcka i pixlar, ej meter): "
+                + ", ".join(f"#{tid}: {d:.0f}" for tid, d in active)
+            )
 
     if len(stats.ball_points) < 0.1 * max(1, len(stats.player_points)):
         insights.append(
