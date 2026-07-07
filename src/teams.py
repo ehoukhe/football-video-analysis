@@ -14,8 +14,7 @@ ignorerar gräsgröna/omättade pixlar så att planen inte stör färgbedömning
 
 from __future__ import annotations
 
-import math
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Optional
 
 import cv2
@@ -80,70 +79,95 @@ class AutoTeamClassifier:
     exempel finns anpassas två klustercentra (k-means) en gång; därefter
     tilldelas varje spelare till närmaste kluster. Innan modellen anpassats
     returneras ``None`` (possession räknas alltså först när lagen är kända).
+
+    Robusthet mot de två vanliga felkällorna:
+
+    * **Ljus/skugga:** färg-särdraget bygger på LAB-krominans (a*, b*) som är i
+      stort sett oberoende av ljushet – samma tröja i sol och skugga ger samma
+      färg.
+    * **ID-fragmentering:** varje spår klassificeras på sin *medianfärg*, och
+      klustercentran räknas om löpande från alla spårens medianfärger (inte bara
+      de första rutorna). Samma spelare under nytt spår-ID får därför samma lag
+      så länge tröjfärgen är stabil.
     """
 
     def __init__(
         self,
         team_a_name: str = "Lag A",
         team_b_name: str = "Lag B",
-        sample_target: int = 300,
         min_box_height: int = 30,
+        min_tracks_to_fit: int = 6,
+        refit_interval: int = 200,
+        **_ignore,
     ) -> None:
         self.team_names = (team_a_name, team_b_name)
-        self.sample_target = sample_target
         # Spelare vars box är lägre än så här (pixlar) är för små för att
         # tröjfärgen ska vara tillförlitlig -> tilldelas inget lag.
         self.min_box_height = min_box_height
-        self._samples: list[np.ndarray] = []
+        self.min_tracks_to_fit = min_tracks_to_fit
+        self.refit_interval = refit_interval
+        self._track_feats: dict[int, list[np.ndarray]] = defaultdict(list)
         self._centroids: Optional[np.ndarray] = None
-        # Röster per spår-ID -> stabil lagtillhörighet (spelare byter inte lag
-        # mellan rutor även om enskilda mätningar spretar).
-        self._track_votes: dict[int, Counter] = defaultdict(Counter)
+        self._since_fit = 0
 
     @property
     def fitted(self) -> bool:
         return self._centroids is not None
 
     def _feature(self, frame: np.ndarray, det: Detection) -> Optional[np.ndarray]:
-        """Robust färg-särdrag för tröjan: hue som (cos, sin) + mättnad + ljushet.
+        """Ljus-oberoende färg-särdrag: median (a*, b*) i LAB över tröjpixlar.
 
-        Hue kodas cirkulärt så att röd (~0) och röd (~179) ligger nära varandra.
-        S/V gör att vita/svarta tröjor (låg mättnad) ändå kan skiljas åt.
+        Gräsgröna, mycket mörka och mycket ljusa pixlar maskas bort. a*/b* är
+        krominans (färg) skild från L* (ljushet), så sol/skugga påverkar knappt.
         """
         region = _jersey_region(frame, det)
         if region is None or region.size == 0:
             return None
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-        h = hsv[:, :, 0].astype(np.float32)
-        s = hsv[:, :, 1].astype(np.float32)
-        v = hsv[:, :, 2].astype(np.float32)
+        h = hsv[:, :, 0].astype(np.int16)
+        v = hsv[:, :, 2].astype(np.int16)
 
-        # Ignorera gräsgröna (hue ~35-85 i OpenCV) och mycket mörka pixlar.
-        keep = (v > 40) & ~((h >= 35) & (h <= 85))
+        # Ignorera gräsgröna (hue ~35-85 i OpenCV) samt nära svart/vitt.
+        keep = (v > 40) & (v < 250) & ~((h >= 35) & (h <= 85))
         if int(keep.sum()) < 20:
-            keep = v > 20  # nödfall: använd allt utom nästan svart
+            keep = (v > 20) & (v < 252)
         if int(keep.sum()) < 5:
             return None
 
-        hue_rad = h[keep] * (2.0 * math.pi / 180.0)
+        lab = cv2.cvtColor(region, cv2.COLOR_BGR2LAB)
+        a = lab[:, :, 1].astype(np.float32)
+        b = lab[:, :, 2].astype(np.float32)
+        # Skala till ~[-1, 1] (128 = neutral).
         feat = np.array(
-            [
-                float(np.mean(np.cos(hue_rad))),
-                float(np.mean(np.sin(hue_rad))),
-                float(np.mean(s[keep]) / 255.0),
-                float(np.mean(v[keep]) / 255.0),
-            ],
+            [(float(np.median(a[keep])) - 128.0) / 128.0,
+             (float(np.median(b[keep])) - 128.0) / 128.0],
             dtype=np.float32,
         )
         return feat
 
-    def _fit(self) -> None:
-        data = np.vstack(self._samples).astype(np.float32)
+    def _track_color(self, tid: int) -> np.ndarray:
+        return np.median(np.vstack(self._track_feats[tid]), axis=0).astype(np.float32)
+
+    def _maybe_fit(self) -> None:
+        # Efter första anpassningen: räkna bara om ibland (spar tid).
+        if self._centroids is not None and self._since_fit < self.refit_interval:
+            return
+        medians = [
+            np.median(np.vstack(f), axis=0)
+            for f in self._track_feats.values()
+            if len(f) >= 2
+        ]
+        if len(medians) < self.min_tracks_to_fit:
+            return
+        data = np.vstack(medians).astype(np.float32)
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
-        _, _, centers = cv2.kmeans(
-            data, 2, None, criteria, 5, cv2.KMEANS_PP_CENTERS
-        )
-        self._centroids = centers  # shape (2, 4)
+        _, _, centers = cv2.kmeans(data, 2, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
+        self._centroids = centers
+        self._since_fit = 0
+
+    def _assign(self, feat: np.ndarray) -> str:
+        dists = np.linalg.norm(self._centroids - feat, axis=1)
+        return self.team_names[int(np.argmin(dists))]
 
     def classify(self, frame: np.ndarray, det: Detection) -> Optional[str]:
         if not det.is_player:
@@ -152,28 +176,19 @@ class AutoTeamClassifier:
         x1, y1, x2, y2 = det.xyxy
         if (y2 - y1) < self.min_box_height:
             return None
+        if det.track_id is None:
+            return None  # kräver spår-ID för stabil färg per spår
 
         feat = self._feature(frame, det)
         if feat is None:
             return None
 
+        self._track_feats[det.track_id].append(feat)
+        self._since_fit += 1
+        self._maybe_fit()
         if not self.fitted:
-            self._samples.append(feat)
-            if len(self._samples) >= self.sample_target:
-                self._fit()
-            return None  # lagen ännu inte bestämda
+            return None  # ännu inte tillräckligt underlag för klustring
 
-        dists = np.linalg.norm(self._centroids - feat, axis=1)
-        inst_team = self.team_names[int(np.argmin(dists))]
-
-        # Utan spår-ID: använd den momentana bedömningen.
-        if det.track_id is None:
-            det.team = inst_team
-            return inst_team
-
-        # Med spår-ID: rösta och returnera majoriteten för det spåret (stabilt).
-        votes = self._track_votes[det.track_id]
-        votes[inst_team] += 1
-        team = votes.most_common(1)[0][0]
+        team = self._assign(self._track_color(det.track_id))
         det.team = team
         return team
