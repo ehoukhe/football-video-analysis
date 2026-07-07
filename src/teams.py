@@ -1,13 +1,20 @@
-"""Enkel lag-klassificering baserat på dominerande tröjfärg (HSV).
+"""Lag-klassificering baserat på tröjfärg.
 
-Detta är en heuristisk första version: den tittar på den övre delen av varje
-spelares bounding box (ungefär tröjan) och avgör vilken av två färgprofiler den
-bäst matchar. För en mer robust lösning kan man senare byta till t.ex.
-k-means-klustring av färger eller en tränad klassificerare.
+Två varianter:
+
+* :class:`TeamClassifier` – manuell: du anger två HSV-färgintervall och varje
+  spelare tilldelas det lag vars färg dominerar i tröjregionen.
+* :class:`AutoTeamClassifier` – automatisk: samlar tröjfärger under ett antal
+  "uppvärmningsrutor", klustrar dem i två grupper (k-means) och tilldelar sedan
+  spelare till närmaste lagfärg. Kräver ingen handinställning av färger.
+
+Båda tittar bara på den övre delen av bounding-boxen (ungefär tröjan) och
+ignorerar gräsgröna/omättade pixlar så att planen inte stör färgbedömningen.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import cv2
@@ -16,7 +23,22 @@ import numpy as np
 from .detection import Detection
 
 
+def _jersey_region(frame: np.ndarray, det: Detection) -> Optional[np.ndarray]:
+    """Klipper ut tröjregionen (övre delen av kroppen) ur bildrutan."""
+    x1, y1, x2, y2 = (int(v) for v in det.xyxy)
+    h = y2 - y1
+    top = max(0, int(y1 + 0.15 * h))
+    bottom = min(frame.shape[0], int(y1 + 0.55 * h))
+    x1 = max(0, x1)
+    x2 = min(frame.shape[1], x2)
+    if bottom <= top or x2 <= x1:
+        return None
+    return frame[top:bottom, x1:x2]
+
+
 class TeamClassifier:
+    """Manuell klassificering via två fasta HSV-färgintervall."""
+
     def __init__(
         self,
         team_a_name: str,
@@ -33,36 +55,102 @@ class TeamClassifier:
         self.b_low = np.array(team_b_hsv_low, dtype=np.uint8)
         self.b_high = np.array(team_b_hsv_high, dtype=np.uint8)
 
-    def _jersey_region(self, frame: np.ndarray, det: Detection) -> Optional[np.ndarray]:
-        x1, y1, x2, y2 = (int(v) for v in det.xyxy)
-        h = y2 - y1
-        # Ta övre ~40 % av kroppen (tröjan), undvik huvud och ben.
-        top = int(y1 + 0.15 * h)
-        bottom = int(y1 + 0.55 * h)
-        top = max(0, top)
-        bottom = min(frame.shape[0], bottom)
-        x1 = max(0, x1)
-        x2 = min(frame.shape[1], x2)
-        if bottom <= top or x2 <= x1:
-            return None
-        return frame[top:bottom, x1:x2]
-
     def classify(self, frame: np.ndarray, det: Detection) -> Optional[str]:
-        """Returnerar lagnamn för en spelardetektion, eller None om osäkert."""
         if not det.is_player:
             return None
-        region = self._jersey_region(frame, det)
+        region = _jersey_region(frame, det)
         if region is None or region.size == 0:
             return None
 
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-        mask_a = cv2.inRange(hsv, self.a_low, self.a_high)
-        mask_b = cv2.inRange(hsv, self.b_low, self.b_high)
-        score_a = int(mask_a.sum())
-        score_b = int(mask_b.sum())
-
+        score_a = int(cv2.inRange(hsv, self.a_low, self.a_high).sum())
+        score_b = int(cv2.inRange(hsv, self.b_low, self.b_high).sum())
         if score_a == 0 and score_b == 0:
             return None
         team = self.team_a_name if score_a >= score_b else self.team_b_name
+        det.team = team
+        return team
+
+
+class AutoTeamClassifier:
+    """Automatisk lag-klassificering via k-means på tröjfärg.
+
+    Under de första rutorna samlas färg-särdrag in. När tillräckligt många
+    exempel finns anpassas två klustercentra (k-means) en gång; därefter
+    tilldelas varje spelare till närmaste kluster. Innan modellen anpassats
+    returneras ``None`` (possession räknas alltså först när lagen är kända).
+    """
+
+    def __init__(
+        self,
+        team_a_name: str = "Lag A",
+        team_b_name: str = "Lag B",
+        sample_target: int = 300,
+    ) -> None:
+        self.team_names = (team_a_name, team_b_name)
+        self.sample_target = sample_target
+        self._samples: list[np.ndarray] = []
+        self._centroids: Optional[np.ndarray] = None
+
+    @property
+    def fitted(self) -> bool:
+        return self._centroids is not None
+
+    def _feature(self, frame: np.ndarray, det: Detection) -> Optional[np.ndarray]:
+        """Robust färg-särdrag för tröjan: hue som (cos, sin) + mättnad + ljushet.
+
+        Hue kodas cirkulärt så att röd (~0) och röd (~179) ligger nära varandra.
+        S/V gör att vita/svarta tröjor (låg mättnad) ändå kan skiljas åt.
+        """
+        region = _jersey_region(frame, det)
+        if region is None or region.size == 0:
+            return None
+        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        h = hsv[:, :, 0].astype(np.float32)
+        s = hsv[:, :, 1].astype(np.float32)
+        v = hsv[:, :, 2].astype(np.float32)
+
+        # Ignorera gräsgröna (hue ~35-85 i OpenCV) och mycket mörka pixlar.
+        keep = (v > 40) & ~((h >= 35) & (h <= 85))
+        if int(keep.sum()) < 20:
+            keep = v > 20  # nödfall: använd allt utom nästan svart
+        if int(keep.sum()) < 5:
+            return None
+
+        hue_rad = h[keep] * (2.0 * math.pi / 180.0)
+        feat = np.array(
+            [
+                float(np.mean(np.cos(hue_rad))),
+                float(np.mean(np.sin(hue_rad))),
+                float(np.mean(s[keep]) / 255.0),
+                float(np.mean(v[keep]) / 255.0),
+            ],
+            dtype=np.float32,
+        )
+        return feat
+
+    def _fit(self) -> None:
+        data = np.vstack(self._samples).astype(np.float32)
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
+        _, _, centers = cv2.kmeans(
+            data, 2, None, criteria, 5, cv2.KMEANS_PP_CENTERS
+        )
+        self._centroids = centers  # shape (2, 4)
+
+    def classify(self, frame: np.ndarray, det: Detection) -> Optional[str]:
+        if not det.is_player:
+            return None
+        feat = self._feature(frame, det)
+        if feat is None:
+            return None
+
+        if not self.fitted:
+            self._samples.append(feat)
+            if len(self._samples) >= self.sample_target:
+                self._fit()
+            return None  # lagen ännu inte bestämda
+
+        dists = np.linalg.norm(self._centroids - feat, axis=1)
+        team = self.team_names[int(np.argmin(dists))]
         det.team = team
         return team

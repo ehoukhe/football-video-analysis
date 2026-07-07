@@ -12,7 +12,7 @@ from tqdm import tqdm
 from .annotate import draw_frame
 from .detection import PlayerBallDetector
 from .stats import MatchStats, generate_coach_insights
-from .teams import TeamClassifier
+from .teams import AutoTeamClassifier, TeamClassifier
 from .video import VideoReader, VideoWriter
 
 
@@ -50,18 +50,26 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
         tracker=config.get("tracker", {}).get("type", "bytetrack.yaml"),
         half=m.get("half", False),
         imgsz=m.get("imgsz", 640),
+        player_conf=m.get("player_conf"),
+        ball_conf=m.get("ball_conf"),
     )
 
-    team_clf: Optional[TeamClassifier] = None
+    team_clf = None
     if t.get("enable"):
-        team_clf = TeamClassifier(
-            team_a_name=t["team_a_name"],
-            team_b_name=t["team_b_name"],
-            team_a_hsv_low=t["team_a_hsv_low"],
-            team_a_hsv_high=t["team_a_hsv_high"],
-            team_b_hsv_low=t["team_b_hsv_low"],
-            team_b_hsv_high=t["team_b_hsv_high"],
-        )
+        if t.get("mode", "auto") == "auto":
+            team_clf = AutoTeamClassifier(
+                team_a_name=t.get("team_a_name", "Lag A"),
+                team_b_name=t.get("team_b_name", "Lag B"),
+            )
+        else:
+            team_clf = TeamClassifier(
+                team_a_name=t["team_a_name"],
+                team_b_name=t["team_b_name"],
+                team_a_hsv_low=t["team_a_hsv_low"],
+                team_a_hsv_high=t["team_a_hsv_high"],
+                team_b_hsv_low=t["team_b_hsv_low"],
+                team_b_hsv_high=t["team_b_hsv_high"],
+            )
 
     writer: Optional[VideoWriter] = None
     heatmaps: list[str] = []
@@ -118,7 +126,8 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
         if pb:
             heatmaps.append(pb)
         if team_clf is not None:
-            for team in (t["team_a_name"], t["team_b_name"]):
+            names = (t.get("team_a_name", "Lag A"), t.get("team_b_name", "Lag B"))
+            for team in names:
                 pt = stats.save_heatmap(
                     str(out_dir / f"{stem}_heatmap_{team}.png"), "team", bins, team=team
                 )

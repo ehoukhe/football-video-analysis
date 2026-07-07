@@ -1,0 +1,51 @@
+# === Noggrannhets-preset ===
+# Prioriterar detekteringskvalitet framför hastighet. Testad på XbotGo/
+# sändningsfilm där spelare på bortre planhalvan annars missas.
+#
+# Använd så här:
+#   python scripts/analyze_match.py --video data/match.mp4 --config config/accuracy.yaml
+# eller i Colab:
+#   cfg = load_config('config/accuracy.yaml')
+#
+# OBS: klart långsammare än config.yaml (stor modell + hög upplösning).
+# Kör kortare klipp/snabbtest först (max_frames), hela matcher tar lång tid på T4.
+
+model:
+  weights: "yolov8l.pt"   # stor modell -> hittar små/avlägsna spelare bättre
+  conf: 0.20              # bas-tröskel (ersätts av player/ball_conf nedan)
+  player_conf: 0.35       # högre -> färre publik/bänk-detektioner
+  ball_conf: 0.15         # lägre -> behåll de få bolldetektionerna
+  iou: 0.50
+  device: "0"             # GPU (sätt "" för auto)
+  half: true              # FP16 på T4
+  imgsz: 1536             # hög upplösning -> bortre spelare överlever. Prova 1920 om minnet räcker.
+  classes: [0, 32]
+
+tracker:
+  type: "botsort.yaml"    # ReID -> färre ID-byten än bytetrack
+
+video:
+  frame_stride: 1
+  resize_width: 0         # krymp INTE bilden före detektering (viktigt för bortre spelare)
+  max_frames: 1500        # snabbtest; sätt 0 för hela matchen (långsamt)
+
+pitch:
+  length_m: 105
+  width_m: 68
+
+teams:
+  enable: true            # possession + lagvisa heatmaps
+  mode: "auto"            # klustra tröjfärger automatiskt
+  team_a_name: "Lag A"
+  team_b_name: "Lag B"
+  team_a_hsv_low: [100, 80, 50]
+  team_a_hsv_high: [130, 255, 255]
+  team_b_hsv_low: [0, 80, 50]
+  team_b_hsv_high: [10, 255, 255]
+
+output:
+  dir: "output"
+  save_video: true
+  save_heatmap: true
+  save_stats: true
+  heatmap_bins: [68, 105]

@@ -6,7 +6,11 @@ model:
   # yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
   # Ladas ner automatiskt av ultralytics första gången.
   weights: "yolov8n.pt"
-  conf: 0.30          # minsta konfidens för en detektion (0-1)
+  conf: 0.30          # bas-tröskel om player/ball_conf inte anges (0-1)
+  # Separata trösklar per klass. Bollen är svårdetekterad -> låg tröskel.
+  # Spelare -> högre tröskel för att sålla bort publik/bänk.
+  player_conf: 0.35
+  ball_conf: 0.15
   iou: 0.50           # IoU-tröskel för non-max suppression
   device: ""          # "" = auto (GPU om tillgänglig), "cpu", "0" för första GPU
   half: true          # FP16 – ~1.5-2x snabbare på GPU (T4). Ignoreras på CPU.
@@ -33,12 +37,14 @@ pitch:
   width_m: 68
 
 teams:
-  # Enkel lag-uppdelning baserat på dominerande tröjfärg (HSV).
-  # Sätt enable: true och justera färgintervallen för din match.
+  # Lag-uppdelning för possession och lagvisa heatmaps.
   enable: false
+  # mode: "auto" = klustra tröjfärger automatiskt (k-means, ingen handpåläggning).
+  #       "manual" = använd de fasta HSV-intervallen nedan.
+  mode: "auto"
   team_a_name: "Lag A"
   team_b_name: "Lag B"
-  # HSV-intervall [H(0-179), S(0-255), V(0-255)]
+  # HSV-intervall (används endast i mode: "manual") [H(0-179), S(0-255), V(0-255)]
   team_a_hsv_low: [100, 80, 50]    # ex. blått
   team_a_hsv_high: [130, 255, 255]
   team_b_hsv_low: [0, 80, 50]      # ex. rött

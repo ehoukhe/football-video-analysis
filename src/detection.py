@@ -77,12 +77,13 @@ class PlayerBallDetector:
         tracker: str = "bytetrack.yaml",
         half: bool = False,
         imgsz: int = 640,
+        player_conf: Optional[float] = None,
+        ball_conf: Optional[float] = None,
     ) -> None:
         # Importeras lokalt för att hålla modulen importerbar utan tunga beroenden.
         from ultralytics import YOLO
 
         self.model = YOLO(weights)
-        self.conf = conf
         self.iou = iou
         self.device = device or None
         self.classes = classes if classes is not None else [PERSON_CLASS, BALL_CLASS]
@@ -90,6 +91,12 @@ class PlayerBallDetector:
         # FP16 ger bara vinst på GPU; tvinga av på CPU för att undvika fel.
         self.half = bool(half) and self.device not in (None, "cpu")
         self.imgsz = imgsz
+        # Separata trösklar: bollen är svårdetekterad (låg conf), spelare kan
+        # ha högre tröskel för att sålla bort publik/bänk. Modellen körs på den
+        # lägre av de två så inget missas, och filtreras sedan per klass.
+        self.player_conf = player_conf if player_conf is not None else conf
+        self.ball_conf = ball_conf if ball_conf is not None else conf
+        self.conf = min(self.player_conf, self.ball_conf)
 
     def track_frame(self, frame: np.ndarray, frame_idx: int) -> FrameResult:
         """Kör detektering + spårning på en bildruta och returnerar resultatet.
@@ -128,6 +135,11 @@ class PlayerBallDetector:
         )
 
         for box, conf, cls, tid in zip(xyxy, confs, clss, ids):
+            # Filtrera per klass med respektive tröskel.
+            if cls == BALL_CLASS and conf < self.ball_conf:
+                continue
+            if cls == PERSON_CLASS and conf < self.player_conf:
+                continue
             result.detections.append(
                 Detection(
                     frame_idx=frame_idx,
