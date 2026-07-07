@@ -28,6 +28,8 @@ video:
   frame_stride: 1
   resize_width: 0         # krymp INTE bilden före detektering (viktigt för bortre spelare)
   max_frames: 1500        # snabbtest; sätt 0 för hela matchen (långsamt)
+  start_seconds: 0        # hoppa över introt: sätt t.ex. 180 för att börja ~3 min in (efter avspark)
+  duration_seconds: 0     # analysera bara ett segment (sekunder); 0 = till slutet
 
 pitch:
   length_m: 105

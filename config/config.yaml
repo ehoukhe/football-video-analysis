@@ -30,6 +30,11 @@ video:
   resize_width: 1280
   # Max antal rutor att bearbeta (0 = hela videon). Bra för snabbtest.
   max_frames: 0
+  # Hoppa över introt: starta analysen efter så här många sekunder in i videon.
+  # Bra för att skippa uppställning/ceremoni före avspark.
+  start_seconds: 0
+  # Analysera bara ett segment på så här många sekunder (0 = till slutet).
+  duration_seconds: 0
 
 pitch:
   # Ungefärliga plandimensioner i meter (för statistik/heatmap-axlar).

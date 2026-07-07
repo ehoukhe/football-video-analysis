@@ -37,6 +37,8 @@ class VideoReader:
         resize_width: int = 0,
         stride: int = 1,
         max_frames: int = 0,
+        start_seconds: float = 0.0,
+        duration_seconds: float = 0.0,
     ) -> None:
         self.path = str(path)
         if not Path(self.path).exists():
@@ -54,6 +56,14 @@ class VideoReader:
         src_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 25.0
         count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Tidsfönster: hoppa över introt och/eller analysera bara ett segment.
+        self.start_frame = max(0, int(round(start_seconds * fps)))
+        self.end_frame = (
+            self.start_frame + int(round(duration_seconds * fps))
+            if duration_seconds and duration_seconds > 0
+            else None
+        )
 
         # Beräkna utdata-dimensioner efter ev. skalning.
         if resize_width and src_w > 0 and resize_width < src_w:
@@ -77,14 +87,20 @@ class VideoReader:
         return frame
 
     def __iter__(self) -> Iterator[tuple[int, np.ndarray]]:
-        idx = -1
+        # Sök fram till startrutan (hoppar över introt).
+        if self.start_frame > 0:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+        idx = self.start_frame - 1
         emitted = 0
         while True:
             ok, frame = self.cap.read()
             if not ok:
                 break
             idx += 1
-            if idx % self.stride != 0:
+            if self.end_frame is not None and idx >= self.end_frame:
+                break
+            # Räkna stride relativt startrutan så första rutan alltid tas med.
+            if (idx - self.start_frame) % self.stride != 0:
                 continue
             yield idx, self._maybe_resize(frame)
             emitted += 1

@@ -80,6 +80,8 @@ def analyze_video(video_path: str, config: dict) -> AnalysisResult:
         resize_width=v.get("resize_width", 0),
         stride=v.get("frame_stride", 1),
         max_frames=v.get("max_frames", 0),
+        start_seconds=v.get("start_seconds", 0),
+        duration_seconds=v.get("duration_seconds", 0),
     ) as reader:
         meta = reader.meta
         stats = MatchStats(
