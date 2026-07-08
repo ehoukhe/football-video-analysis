@@ -140,6 +140,77 @@ class AutoKeypointCalibrator:
         return vt
 
 
+# Roboflows SoccerPitchConfiguration – 32 plan-nyckelpunkter i centimeter,
+# i samma ordning som modellen football-field-detection-f07vi ger dem.
+SOCCER_PITCH_VERTICES_CM = [
+    (0, 0), (0, 1450), (0, 2584), (0, 4416), (0, 5550), (0, 7000),
+    (550, 2584), (550, 4416), (1100, 3500),
+    (2015, 1450), (2015, 2584), (2015, 4416), (2015, 5550),
+    (6000, 0), (6000, 2585), (6000, 4415), (6000, 7000),
+    (9985, 1450), (9985, 2584), (9985, 4416), (9985, 5550),
+    (10900, 3500), (11450, 2584), (11450, 4416),
+    (12000, 0), (12000, 1450), (12000, 2584), (12000, 4416), (12000, 5550), (12000, 7000),
+    (5085, 3500), (6915, 3500),
+]
+_PITCH_CM_LENGTH = 12000.0
+_PITCH_CM_WIDTH = 7000.0
+
+
+def soccer_vertices_m(length: float = 105.0, width: float = 68.0) -> np.ndarray:
+    """De 32 plan-nyckelpunkterna skalade från cm till meter på ett length x width-plan."""
+    v = np.asarray(SOCCER_PITCH_VERTICES_CM, dtype=np.float32)
+    return np.stack(
+        [v[:, 0] / _PITCH_CM_LENGTH * length, v[:, 1] / _PITCH_CM_WIDTH * width], axis=1
+    )
+
+
+class RoboflowFieldDetector:
+    """Plan-nyckelpunkter via en Roboflow ``inference``-modell (utan supervision).
+
+    Parsar svaret från ``model.infer(frame)`` direkt (predictions -> keypoints)
+    och parar ihop de konfidenta punkterna med deras plankoordinater i meter.
+    ``vertices_m`` ska vara (32, 2) i samma ordning som modellens nyckelpunkter
+    (t.ex. från :func:`soccer_vertices_m`).
+    """
+
+    def __init__(self, model, vertices_m, conf: float = 0.5) -> None:
+        self.model = model
+        self.vertices = np.asarray(vertices_m, dtype=np.float32)
+        self.conf = conf
+
+    @staticmethod
+    def _to_dict(res):
+        if isinstance(res, dict):
+            return res
+        for attr in ("dict", "model_dump"):
+            fn = getattr(res, attr, None)
+            if callable(fn):
+                try:
+                    return fn(by_alias=True, exclude_none=True)
+                except TypeError:
+                    return fn()
+        raise TypeError("Okänt inference-svar; kan inte tolka predictions.")
+
+    def __call__(self, frame):
+        out = self.model.infer(frame)
+        res = out[0] if isinstance(out, list) else out
+        data = self._to_dict(res)
+        preds = data.get("predictions") or []
+        if not preds:
+            return None, None
+        kps = preds[0].get("keypoints") or []
+        img_pts, pitch_pts = [], []
+        for i, kp in enumerate(kps):
+            if i >= len(self.vertices):
+                break
+            if float(kp.get("confidence", 0.0)) >= self.conf:
+                img_pts.append((float(kp["x"]), float(kp["y"])))
+                pitch_pts.append(self.vertices[i])
+        if len(img_pts) < 4:
+            return None, None
+        return np.asarray(img_pts, np.float32), np.asarray(pitch_pts, np.float32)
+
+
 class YoloPitchKeypointDetector:
     """Plan-nyckelpunkter via en ultralytics YOLO-pose-modell.
 
