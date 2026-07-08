@@ -242,11 +242,14 @@ class YoloPitchKeypointDetector:
             return None, None
         xy = kps.xy.cpu().numpy()
         if xy.ndim == 3:
+            if xy.shape[0] == 0:
+                return None, None  # ingen plan-instans i rutan
             xy = xy[0]  # första instansen (planet)
         conf = (
             kps.conf.cpu().numpy() if kps.conf is not None else np.ones(len(xy))
         )
-        conf = conf[0] if conf.ndim == 2 else conf
+        if conf.ndim == 2:
+            conf = conf[0] if conf.shape[0] else np.ones(len(xy))
 
         k = min(len(xy), len(self.vertices), len(conf))
         keep = np.where(conf[:k] >= self.conf)[0]
