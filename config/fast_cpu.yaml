@@ -1,0 +1,50 @@
+# === Lätt CPU-preset ===
+# För att kunna köra UTAN GPU (t.ex. när Colabs GPU-kvot är slut). Prioriterar
+# fart framför noggrannhet: liten modell, låg upplösning, få rutor. Bra för att
+# validera pipelinen/kalibreringen på ett kort klipp – inte för skarp analys.
+
+model:
+  weights: "yolov8n.pt"   # minsta modellen
+  conf: 0.25
+  player_conf: 0.35
+  ball_conf: 0.15
+  iou: 0.50
+  device: "cpu"
+  half: false             # FP16 ger inget på CPU
+  imgsz: 640
+  classes: [0, 32]
+
+tracker:
+  type: "bytetrack.yaml"
+
+video:
+  frame_stride: 3         # hoppa över rutor för fart
+  resize_width: 960
+  max_frames: 150         # kort klipp – CPU är långsamt
+  start_seconds: 0
+  duration_seconds: 0
+
+pitch:
+  length_m: 105
+  width_m: 68
+  calibrate: false
+  calibrator: "static"
+  image_points: []
+  pitch_points: []
+
+teams:
+  enable: true
+  mode: "auto"
+  team_a_name: "Lag A"
+  team_b_name: "Lag B"
+  team_a_hsv_low: [100, 80, 50]
+  team_a_hsv_high: [130, 255, 255]
+  team_b_hsv_low: [0, 80, 50]
+  team_b_hsv_high: [10, 255, 255]
+
+output:
+  dir: "output"
+  save_video: true
+  save_heatmap: true
+  save_stats: true
+  heatmap_bins: [68, 105]
