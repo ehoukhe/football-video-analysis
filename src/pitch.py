@@ -110,20 +110,34 @@ class AutoKeypointCalibrator:
 
     Detektorn är modell-agnostisk: se :class:`YoloPitchKeypointDetector` för en
     ultralytics-baserad implementation.
+
+    ``recompute_every``: kör bara nyckelpunktsmodellen var N:e ruta och
+    återanvänd senaste homografin däremellan (kameran rör sig långsamt mellan
+    rutor). Höj för snabbare körning (särskilt på CPU); 1 = varje ruta.
     """
 
-    def __init__(self, detector, min_points: int = 4) -> None:
+    def __init__(self, detector, min_points: int = 4, recompute_every: int = 1) -> None:
         self.detector = detector
         self.min_points = min_points
+        self.recompute_every = max(1, recompute_every)
+        self._last: Optional[ViewTransformer] = None
+        self._last_idx: int = -10**9
 
     def homography_for(self, frame, frame_idx) -> Optional[ViewTransformer]:
+        # Återanvänd senaste homografin mellan omräkningarna.
+        if self._last is not None and (frame_idx - self._last_idx) < self.recompute_every:
+            return self._last
+
         image_points, pitch_points = self.detector(frame)
         if image_points is None or len(image_points) < self.min_points:
-            return None
+            return self._last  # behåll senaste kända om denna ruta inte gick
         try:
-            return ViewTransformer(image_points, pitch_points)
+            vt = ViewTransformer(image_points, pitch_points)
         except ValueError:
-            return None
+            return self._last
+        self._last = vt
+        self._last_idx = frame_idx
+        return vt
 
 
 class YoloPitchKeypointDetector:
